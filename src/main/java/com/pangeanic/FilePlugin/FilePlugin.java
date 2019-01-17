@@ -48,6 +48,8 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 import java.util.prefs.Preferences;
 import javax.swing.table.JTableHeader;
+import org.apache.commons.io.FilenameUtils;
+import org.apache.http.entity.StringEntity;
 
 public class FilePlugin extends JFrame {
 
@@ -57,11 +59,7 @@ public class FilePlugin extends JFrame {
     
     
 
-    //private static String hostAddress="192.168.100.175:5000";
-    //private static String hostAddress="pangeanic-online.com:5095";
-    private static String hostAddress = "prod.pangeamt.com:8080/NexAPI/v1";
-    //private static String translatedFolder="C:\\Users\\aestela\\Documents\\translated\\";
-    //private static String pretranslatedFolder="C:\\Users\\aestela\\Documents\\pretranslated\\";
+    private static String hostAddress = "prod.pangeamt.com:8080/PGFile/v1";
 
     private static String apiKey = "000000";
     private static String user = "admin";
@@ -260,7 +258,9 @@ public class FilePlugin extends JFrame {
         }
 
         public void setCode(MyCodes code) {
+            System.out.println("setCode starts");
             this.code = code;
+            System.out.println("setCode Msg: " + code.getMsg());
             setStatus(code.getMsg());
             if (isZip && code == MyCodes.TRANSLATING) {
                 model.setValueAt(ztot + "/" + zfinished + "/" + zfailed, myIndex, 4);
@@ -383,301 +383,133 @@ public class FilePlugin extends JFrame {
         }
     }
 
-    private static int sendRestStatus(Fic doc) throws ClientProtocolException, IOException {
-
-        String payload = "{\"fileid\":\"" + doc.myId + "\",\"key\":\"" + apiKey + "\",\"username\":\"" + user + "\",\"automode\":\"" + auto + "\"}";
-        System.out.println("Sending Check post " + payload);
-
-        CloseableHttpClient httpclient = HttpClients.createDefault();
-        HttpGet httpGet = new HttpGet("http://" + hostAddress + "/checkfile?apikey=" + apiKey + "&username=" + user);
-
-        CloseableHttpResponse response = httpclient.execute(httpGet);
-
-        int status = response.getStatusLine().getStatusCode();
-
-        System.out.println("REST answered: " + response.toString() + " statusCode: " + status);
-        if (status == 200) {
-
-            try {
-                HttpEntity entity = response.getEntity();
-                String responseString = EntityUtils.toString(entity);
-                System.out.println("REST rs: " + responseString);
-                JSONObject obj = new JSONObject(responseString);
-                System.out.println("REST rs: " + obj);
-                System.out.println("File Id: " + obj.getString("fileId"));
-                System.out.println("File tname: " + obj.getString("translatedName"));
-                MyCodes code = MyCodes.getCode(obj.getInt("status"));
-                doc.setTranslatedName(obj.getString("translatedName"));
-
-                doc.setCode(code);
-                if (code == MyCodes.FINISHED) {
-                    doc.setLink(obj.getString("link"));
-
-                    String downloadurl = "http://" + hostAddress + "/download?apikey=" + apiKey + "&fileid=" + obj.getString("fileId");
-                    String outputname = doc.name.replaceAll(" ", "_");
-                    //System.out.println("PATH SEPARATOR");
-                    //System.out.println(File.pathSeparator);
-                    System.out.println("Wget " + translatedFolder + " | " + doc.translatedName + " <<< " + downloadurl);
-                    wget.wGet(translatedFolder + doc.translatedName, downloadurl);
-
-                    //do wget
-                    /*
-                    //test mode
-                    Path source = Paths.get(pretranslatedFolder+doc.myTgt+ "_" +doc.name); ;
-                    Path destination = Paths.get(translatedFolder+doc.myTgt+ "_" +doc.name);
- 
-                    try {
-			Files.copy(source, destination);
-                    } catch (IOException e) {
-			e.printStackTrace();
-                    } 
-                     */
-                }
-            } catch (Exception ee) {
-                System.out.println("Excpt: " + ee);
-                status = 0;
-            } finally {
-                IOUtils.closeQuietly(response);
-            }
-
-        }
-        httpclient.close();
-
-        return status;
-    }
-
+    
     private int sendGetStatus() throws ClientProtocolException, IOException {
+        int retstatus = 200;
+        for (Fic fic : listFics) {
+             if (fic.myId != null) if (fic.code.id<120 && fic.code.id>-1) {
+                 System.out.println("FIC FOUND: " + fic.myId + " " + fic.name + " Status: " + fic.code.id );
+                 
+                 //get status
+                CloseableHttpClient httpclient = HttpClients.createDefault();
 
-        CloseableHttpClient httpclient = HttpClients.createDefault();
-        HttpGet httpGet = new HttpGet("http://" + hostAddress + "/checkfile?apikey=" + apiKey + "&username=" + user + "&automode=" + auto);
+                try {
+                    HttpPost request = new HttpPost("https://" + hostAddress + "/aretrievefiletranslation");
+                    String paramsString="{\"token\":\""+ apiKey +"\",\"guid\":\""+ fic.myId +"\"} ";
+                    System.out.println("Sending REST to " + "https://" + hostAddress + "/aretrievefiletranslation" + " Using: " + paramsString);
+                    StringEntity params =new StringEntity(paramsString);
+                    request.addHeader("content-type", "application/json");
+                    request.addHeader("Accept","application/json");
+                    request.setEntity(params);
+                    CloseableHttpResponse response = httpclient.execute(request);
+                    int status = response.getStatusLine().getStatusCode();
+                    System.out.println("REST answered: " + response.toString() + " statusCode: " + status);
+                    // handle response here...
+                    HttpEntity entity = response.getEntity();
+                    String responseString = EntityUtils.toString(entity);
+                    System.out.println("REST rs: " + responseString);
+                    JSONObject jsonObject = new JSONObject(responseString);
+                    boolean success = jsonObject.getBoolean("success");
+                    System.out.println("success: " + success);
+                    
+                    if (success) {
+                        System.out.println("success detected");
+                        JSONObject data = jsonObject.getJSONObject("data");
+                        System.out.println("data answer parsed");
+                        String encoded=data.getString("file");
+                        if (encoded.length()<5){
+                            int result = Integer.parseInt((String)data.get("file"));
+                            int statusFile=result;
+                            System.out.println("File not finished, status: " + statusFile);
+                            MyCodes code = MyCodes.getCode(statusFile);
+                            fic.setCode(code);    
+                        } else {
+                            //file can be downloaded
+                            System.out.println("File can be downloaded");
+                            
+                            byte[] filedata = Base64.getDecoder().decode(encoded);
 
-        CloseableHttpResponse response = httpclient.execute(httpGet);
-
-        int status = response.getStatusLine().getStatusCode();
-
-        System.out.println("REST answered: " + response.toString() + " statusCode: " + status);
-        if (status == 200) {
-
-            try {
-                HttpEntity entity = response.getEntity();
-                String responseString = EntityUtils.toString(entity);
-                System.out.println("REST rs: " + responseString);
-                JSONArray jsonArray = new JSONArray(responseString);
-                int numfiles = jsonArray.length();
-                if (numfiles > 0) {
-                    for (int i = 0, size = jsonArray.length(); i < size; i++) {
-                        JSONObject oia = jsonArray.getJSONObject(i);
-                        String fileid = oia.getString("fileId");
-                        System.out.printf("Recovered fileid %s \n", fileid);
-                        String filename = oia.getString("fileName");
-                        System.out.printf("Recovered filename %s \n", filename);
-                        String link = "";
-                        try {
-                            link = oia.getString("link");
-                            System.out.printf("Recovered link %s \n", link);
-                        } catch (Exception eeee) {
-                        }
-
-                        String src = oia.getString("src");
-                        String tgt = oia.getString("tgt");
-                        String processname = oia.getString("processName");
-                        String translatedname = "";
-                        try {
-                            translatedname = oia.getString("translatedName");
-                        } catch (Exception ee) {
-                            //do nothing  
-                        }
-                        System.out.printf("Recovered langs %s -> %s\n", src, tgt);
-
-                        int filestatus = oia.getInt("status");
-
-                        System.out.printf("Recovered status %d \n", filestatus);
-                        MyCodes code = MyCodes.getCode(filestatus);
-                        System.out.printf("Recovered status str %s \n", code.getMsg());
-
-                        int zTot = 0;
-                        int zFinished = 0;
-                        int zFailed = 0;
-                        boolean isZip = false;
-                        try {
-                            isZip = oia.getBoolean("isZip");
-                            if (isZip) {
-                                zTot = oia.getInt("ztot");
-                                zFinished = oia.getInt("zfinished");
-                                zFailed = oia.getInt("zfailed");
+                            try { 
+                               System.out.println("Writing to: " + translatedFolder + fic.name);
+                               OutputStream stream = new FileOutputStream(translatedFolder + fic.name);      
+                               stream.write(filedata);
+                               System.out.println("File dowloaded to : " + translatedFolder + fic.name);
+                               MyCodes code = MyCodes.getCode(120);
+                               System.out.println("Setting code to 120");
+                               fic.setCode(code);
+                               System.out.println("Code is now 120");
+                               stream.close();
+                               System.out.println("Stream closed");
                             }
-                        } catch (Exception ee) {
-                            System.out.println("Catched exception Zip handling except");
-                        }
-
-                        boolean found = false;
-                        for (Fic fic : listFics) {
-                            if (fic.myId != null) {
-                                if (fic.myId.equals(fileid)) {
-                                    found = true;
-                                    System.out.printf("Setting data for name %s\n", fic.name);
-                                    fic.setTranslatedName(translatedname);
-                                    System.out.printf("Setting translatedname %s\n", translatedname);
-                                    fic.setCode(code);
-                                    System.out.printf("Setting code %s\n", code.getMsg());
-                                    try {
-                                        if (isZip) {
-                                            fic.isZip = isZip;
-                                            fic.ztot = zTot;
-                                            fic.zfailed = zFailed;
-                                            fic.zfinished = zFinished;
-                                        }
-                                    } catch (Exception ee) {
-                                        System.out.println("Catched exception Zip handling except");
-                                    }
-                                    System.out.println("Finished?");
-                                    if (code == MyCodes.FINISHED) {
-                                        try {
-                                            System.out.println("Dealing with FINISHED status");
-                                            String downloadurl = "http://" + hostAddress + "/download?apikey=" + apiKey + "&fileid=" + fic.myId;
-
-                                            System.out.println("Wget " + translatedFolder + " | " + translatedname + " <<< " + downloadurl);
-                                            wget.wGet(translatedFolder + translatedname, downloadurl);
-
-                                            fic.setCode(MyCodes.DOWNLOADED);
-                                            System.out.println("Code set to DOWNLODED");
-                                        } catch (Exception ee) {
-                                            fic.setCode(MyCodes.FAILED);
-                                        }
-                                    } else {
-                                        System.out.println("File was not FINISHED");
-                                    }
-                                }
+                            catch (Exception e) 
+                            {
+                               System.err.println("Couldn't write to file...");
                             }
                         }
-                        if (!found && code == MyCodes.FINISHED) {
-                            // a new file! probably from a zip job
-                            Fic fic = new Fic(filename, processname, translatedname, fileid, src, tgt, code);
-                            System.out.println("New Doc created " + fic.name + " AFTER check call");
-                            listFics.add(fic);
-                            System.out.println("New Doc added to list");
 
-                            if (code == MyCodes.FINISHED) {
-                                fic.setLink(link);
-                            }
-                            System.out.println("New Doc link set");
-                        }
+                    } else {
+                        //File not finished
+                        System.out.println("error answer!");
+                        JSONObject error = jsonObject.getJSONObject("error");
 
+                        int statusFile=error.getInt("code");
+                        System.out.println("File not finished, status: " + statusFile);
+                        //MyCodes code = MyCodes.getCode(statusFile);
+                        //fic.setCode(code);
                     }
-                }
-            } catch (Exception ee) {
-                System.out.println("Excpt: " + ee);
-
-            } finally {
-                IOUtils.closeQuietly(response);
-            }
-
+                    
+                    
+                }catch (Exception ex) {
+                    // handle exception here
+                } finally {
+                    httpclient.close();
+                }                 
+             }
         }
-        httpclient.close();
 
-        return status;
+
+        return retstatus;
     }
 
     private static int sendRest(Fic doc) throws ClientProtocolException, IOException {
 
-        String payload = "{\"title\":\"" + doc.name + "\",\"processname\":\"" + doc.processName + "\",\"engine\":\"" + doc.myEngineId + "\",\"src\":\"" + doc.mySrc + "\",\"tgt\":\"" + doc.myTgt + "\",\"glossary\":\"" + doc.glossaryId + "\",\"apiKey\":\"" + apiKey + "\",\"username\":\"" + user + "\",\"automode\":\"" + auto + "\"}";
-        System.out.println("Sending post " + payload + "\nurl: " + "http://" + hostAddress + "/sendfile");
+        System.out.println("sendRest for " + doc.name);
+        String ext1 = FilenameUtils.getExtension(doc.name);
+        
+        String encodedFile = null;
+        FileInputStream fileInputStreamReader = new FileInputStream(doc.file);
+        byte[] bytes = new byte[(int)doc.file.length()];
+        fileInputStreamReader.read(bytes);
+        encodedFile = new String(Base64.getEncoder().encode(bytes));
+
+        StringEntity payload = new StringEntity("{\"fileType\":\"" + ext1 + "\",\"source\":\"" + doc.mySrc + "\",\"target\":\"" + doc.myTgt+ "\",\"token\":\"" + apiKey + "\",\"file\":\"" + encodedFile + "\"}");
+        System.out.println("Sending post for fileType: " + ext1 + " " + doc.mySrc + ">" + doc.myTgt + " at url: http://" + hostAddress + "/atranslatefile");
 
         CloseableHttpClient client = HttpClients.createDefault();
-        HttpPost httpPost = new HttpPost("http://" + hostAddress + "/sendfile");
+        HttpPost request = new HttpPost("https://" + hostAddress + "/atranslatefile");
 
-        MultipartEntityBuilder builder = MultipartEntityBuilder.create();
-        Charset chars = Charset.forName("UTF-8");
-        builder.setCharset(chars);
-        //builder.addTextBody("json", payload,  ContentType.APPLICATION_JSON);
-        String fileName = URLEncoder.encode(doc.name, "UTF-8");
-        builder.addTextBody("title", fileName, ContentType.TEXT_PLAIN.withCharset("UTF-8"));
-        builder.addTextBody("processname", doc.processName, ContentType.TEXT_PLAIN);
-        builder.addTextBody("engine", Integer.toString(doc.myEngineId), ContentType.TEXT_PLAIN);
-        builder.addTextBody("glossary", Integer.toString(doc.glossaryId), ContentType.TEXT_PLAIN);
-        builder.addTextBody("src", doc.mySrc, ContentType.TEXT_PLAIN);
-        builder.addTextBody("tgt", doc.myTgt, ContentType.TEXT_PLAIN);
-        builder.addTextBody("apikey", apiKey, ContentType.TEXT_PLAIN);
-        builder.addTextBody("username", user, ContentType.TEXT_PLAIN);
-        builder.addTextBody("automode", Boolean.toString(auto), ContentType.TEXT_PLAIN);
-
-        builder.addBinaryBody("file", doc.file, ContentType.APPLICATION_OCTET_STREAM, doc.name);
-        HttpEntity multipart = builder.build();
-
-        //System.out.println(multipart.getContent());
-        httpPost.setEntity(multipart);
-
-        CloseableHttpResponse response = client.execute(httpPost);
+        request.addHeader("content-type", "application/json");
+        request.addHeader("Accept","application/json");
+        request.setEntity(payload);
+        CloseableHttpResponse response = client.execute(request);
         int status = response.getStatusLine().getStatusCode();
         System.out.println("REST answered: " + response.toString() + " statusCode: " + status);
-        if (status == 200) {
+        // handle response here...
+        HttpEntity entity = response.getEntity();
+        String responseString = EntityUtils.toString(entity);
+        System.out.println("REST rs: " + responseString);
+        JSONObject jsonObject = new JSONObject(responseString);
+        JSONObject data = jsonObject.getJSONObject("data");
+        String fileId= data.getString("guid");
 
-            try {
-                HttpEntity entity = response.getEntity();
-                String responseString = EntityUtils.toString(entity);
-                System.out.println("REST rs: " + responseString);
-                JSONObject obj = new JSONObject(responseString);
-                System.out.println("REST rs: " + obj);
-                System.out.println("File Id: " + obj.getString("fileId"));
-                doc.setCode(MyCodes.UPLOADED);
-                doc.setId(obj.getString("fileId"));
-            } catch (Exception ee) {
-                System.out.println("Excpt: " + ee);
-                doc.setCode(MyCodes.PENDING_UPLOAD);
-
-            } finally {
-                IOUtils.closeQuietly(response);
-            }
-
-        }
+        
+        System.out.println("File Id: " + fileId);
+        doc.setCode(MyCodes.UPLOADED);
+        doc.setId(fileId);
         client.close();
-
         return status;
     }
 
-    int sendGlossary(File file, String src, String tgt, String descr) throws ClientProtocolException, IOException {
-
-        String payload = "{\"title\":\"" + file.getName() + "\",\"description\":\"" + descr + "\",\"src\":\"" + src + "\",\"tgt\":\"" + tgt + "\",\"key\":\"" + apiKey + "\",\"username\":\"" + user + "\"}";
-        System.out.println("Sending post " + payload);
-
-        CloseableHttpClient client = HttpClients.createDefault();
-        HttpPost httpPost = new HttpPost("http://" + hostAddress + "/sendglossary");
-
-        MultipartEntityBuilder builder = MultipartEntityBuilder.create();
-        //builder.addTextBody("json", payload,  ContentType.APPLICATION_JSON);
-        builder.addTextBody("key", apiKey, ContentType.TEXT_PLAIN);
-        builder.addTextBody("username", user, ContentType.TEXT_PLAIN);
-        System.out.println("multipart adding " + "key " + apiKey);
-        builder.addTextBody("title", apiKey, ContentType.TEXT_PLAIN);
-        builder.addTextBody("description", apiKey, ContentType.TEXT_PLAIN);
-        builder.addBinaryBody("file", file, ContentType.APPLICATION_OCTET_STREAM, file.getName());
-        HttpEntity multipart = builder.build();
-
-        httpPost.setEntity(multipart);
-
-        CloseableHttpResponse response = client.execute(httpPost);
-        int status = response.getStatusLine().getStatusCode();
-        System.out.println("REST answered: " + response.toString() + " statusCode: " + status);
-        if (status == 200) {
-
-            try {
-                HttpEntity entity = response.getEntity();
-                String responseString = EntityUtils.toString(entity);
-                System.out.println("REST rs: " + responseString);
-                JSONObject obj = new JSONObject(responseString);
-                System.out.println("REST rs: " + obj);
-            } catch (Exception ee) {
-                System.out.println("Excpt: " + ee);
-
-            } finally {
-                IOUtils.closeQuietly(response);
-            }
-
-        }
-        client.close();
-
-        return status;
-    }
 
     public static void setColumnWidths(JTable table, int... widths) {
         TableColumnModel columnModel = table.getColumnModel();
@@ -690,117 +522,38 @@ public class FilePlugin extends JFrame {
         }
     }
 
-    private int sendRestJobs() throws ClientProtocolException, IOException {
-
-        CloseableHttpClient httpclient = HttpClients.createDefault();
-        HttpGet httpGet = new HttpGet("http://" + hostAddress + "/checkfile?apikey=" + apiKey + "&username=" + user + "&automode"+auto);
-
-        CloseableHttpResponse response = httpclient.execute(httpGet);
-
-        int status = response.getStatusLine().getStatusCode();
-
-        System.out.println("REST answered statusCode: " + status);
-        System.out.println("REST answered: " + response.toString());
-        HttpEntity entity = response.getEntity();
-        String responseString = EntityUtils.toString(entity);
-        System.out.println("REST rs: " + responseString);
-        JSONArray jsonArray = new JSONArray(responseString);
-        System.out.println("REST rs: " + jsonArray);
-
-        if (status == 200) {
-            //JSONArray jsonArray =  new JSONArray(responseString);
-            try {
-                apiKeyOk = true;
-                System.out.println("API Key validated");
-
-                for (int i = 0, size = jsonArray.length(); i < size; i++) {
-                    JSONObject oia = jsonArray.getJSONObject(i);
-                    String fileid = oia.getString("fileId");
-                    System.out.printf("Recovered fileid %s \n", fileid);
-                    String filename = oia.getString("fileName");
-                    System.out.printf("Recovered filename %s \n", filename);
-                    String link = oia.getString("link");
-                    System.out.printf("Recovered link %s \n", link);
-
-                    String src = oia.getString("src");
-                    String tgt = oia.getString("tgt");
-                    String processname = oia.getString("processName");
-                    String translatedname = "";
-                    try {
-                        translatedname = oia.getString("translatedName");
-                    } catch (Exception ee) {
-                        //do nothing  
-                    }
-                    System.out.printf("Recovered langs %s -> %s\n", src, tgt);
-
-                    int filestatus = oia.getInt("status");
-
-                    System.out.printf("Recovered status %d \n", filestatus);
-                    MyCodes code = MyCodes.getCode(filestatus);
-                    System.out.printf("Recovered status str %s \n", code.getMsg());
-
-                    Fic fic = new Fic(filename, processname, translatedname, fileid, src, tgt, code);
-                    System.out.println("New Doc created " + fic.name + " AFTER Rest jobs call");
-                    listFics.add(fic);
-                    System.out.println("New Doc added to list");
-
-                    if (code == MyCodes.FINISHED) {
-                        fic.setLink(link);
-                    }
-                    System.out.println("New Doc link set");
-                }
-            } catch (Exception ee) {
-                System.out.println("Excpt: " + ee);
-
-            } finally {
-                IOUtils.closeQuietly(response);
-            }
-        }
-        httpclient.close();
-
-        return status;
-    }
 
     private int sendRestGrants() throws ClientProtocolException, IOException {
         Engine.engines.clear();
 
-        System.out.println("Sending get RestGrant to:" + "http://" + hostAddress + "/engines?apikey=" + apiKey + "&username=" + user + "&automode"+auto);
+        System.out.println("Sending get RestGrant to:" + "http://" + hostAddress + "/describesuppliers/" + apiKey );
         CloseableHttpClient httpclient = HttpClients.createDefault();
-        HttpGet httpGet = new HttpGet("http://" + hostAddress + "/engines?apikey=" + apiKey);
+        HttpGet httpGet = new HttpGet("https://" + hostAddress + "/describesuppliers/" + apiKey);
         CloseableHttpResponse response = httpclient.execute(httpGet);
 
         int status = response.getStatusLine().getStatusCode();
+        if (status==200) apiKeyOk=true;
         System.out.println("REST answered statusCode: " + status);
         System.out.println("REST answered: " + response.toString());
         HttpEntity entity = response.getEntity();
         String responseString = EntityUtils.toString(entity);
         System.out.println("REST rs: " + responseString);
-        JSONArray jsonArray = new JSONArray(responseString);
-        System.out.println("REST rs: " + jsonArray);
-
-        if (status == 200) {
-            try {
-                for (int i = 0, size = jsonArray.length(); i < size; i++) {
-                    JSONObject engineObj = jsonArray.getJSONObject(i);
-                    int engineId = engineObj.getInt("id");
-                    String src = engineObj.getString("src");
-                    String tgt = engineObj.getString("tgt");
-                    String domain = "";
-                    try {
-                        domain = engineObj.getString("domain");
-                    } catch (Exception ee) {
-                    }
-                    String flavor = "";
-                    try {
-                        flavor = (String) engineObj.getString("flavor");
-                    } catch (Exception ee) {
-                    }
-                    String descr = "";
-                    try {
-                        descr = (String) engineObj.getString("descr");
-                    } catch (Exception ee) {
-                    }
-                    Engine e = new Engine(engineId, domain, flavor, src, tgt, descr);
+        JSONObject jsonObject = new JSONObject(responseString);
+        JSONObject data = jsonObject.getJSONObject("data");
+        JSONArray suppliers = data.getJSONArray("suppliers");
+        int engineId=0;
+        for (int i = 0, size = suppliers.length(); i < size; i++) {
+            JSONObject supplier = suppliers.getJSONObject(i);
+            String supplierName= supplier.getString("name");
+            JSONArray engines = supplier.getJSONArray("engines");
+                for (int j = 0, sizeengines = engines.length(); j < sizeengines; j++) {
+                    engineId++;
+                    JSONObject engineObj = engines.getJSONObject(j);
+                    String name = engineObj.getString("name");
+                    String src = engineObj.getString("source");
+                    String tgt = engineObj.getString("target");
+                    String domain = engineObj.getString("domain");
+                    Engine e = new Engine(engineId, domain, "", src, tgt, supplierName + "*" + name + " " + domain);
                     if (currentEngineId == engineId) {
                         currentEngine = Engine.getEngine(currentEngineId);
                     }
@@ -810,13 +563,7 @@ public class FilePlugin extends JFrame {
                     engMenuItem.addActionListener(engActionListener);
 
                 }
-            } catch (Exception ee) {
-                System.out.println("Excpt: " + ee);
-
-            } finally {
-                IOUtils.closeQuietly(response);
-            }
-        }
+            } 
         httpclient.close();
         boolean found = false;
         for (Engine engine : Engine.engines) {
@@ -847,105 +594,6 @@ public class FilePlugin extends JFrame {
         return status;
     }
 
-    int sendRestGlossaries() throws ClientProtocolException, IOException {
-        listGlos.clear();
-
-        System.out.println("Sending get to:" + "http://" + hostAddress + "/glossaries?apikey=" + apiKey + "&username=" + user + "&automode"+auto);
-        CloseableHttpClient httpclient = HttpClients.createDefault();
-        HttpGet httpGet = new HttpGet("http://" + hostAddress + "/glossaries?apikey=" + apiKey + "&username=" + user);
-        CloseableHttpResponse response = httpclient.execute(httpGet);
-
-        int status = response.getStatusLine().getStatusCode();
-
-        System.out.println("REST answered statusCode: " + status);
-        System.out.println("REST answered: " + response.toString());
-        HttpEntity entity = response.getEntity();
-        String responseString = EntityUtils.toString(entity);
-        System.out.println("REST rs: " + responseString);
-        JSONArray jsonArray = new JSONArray(responseString);
-        System.out.println("REST rs: " + jsonArray);
-
-        if (status == 200) {
-
-            try {
-
-                boolean foundMyCurrent = false;
-                for (int i = 0, size = jsonArray.length(); i < size; i++) {
-                    JSONObject oia = jsonArray.getJSONObject(i);
-                    String filename = oia.getString("fileName");
-                    System.out.printf("Recovered filename %s \n", filename);
-                    int id = oia.getInt("id");
-                    if (id == currentGlossaryId) {
-                        foundMyCurrent = true;
-                    }
-                    String description = oia.getString("descr");
-                    System.out.printf("Recovered description %s\n", description);
-
-                    Glossary glo = new Glossary(id, filename, "", "", description);
-                    System.out.println("New Glo created " + glo.myId + " " + glo.name + " AFTER Rest glossaries call");
-                    listGlos.add(glo);
-                    System.out.println("New Glo added to list");
-
-                }
-                if (!foundMyCurrent) {
-                    currentGlossaryId = 0;
-                    currentGlossary = "NO GLOSSARY";
-                    updateSettingsLabel();
-                    savePrefs();
-                }
-
-            } catch (Exception ee) {
-                System.out.println("Excpt: " + ee);
-
-            } finally {
-                IOUtils.closeQuietly(response);
-            }
-        }
-        httpclient.close();
-
-        return status;
-    }
-
-    int sendDelGlossary(int id, String name) throws ClientProtocolException, IOException {
-        listGlos.clear();
-
-        String payload = "{\"userid\":\"" + 0 + "\",\"key\":\"" + apiKey + "\",\"username\":\"" + user + "\",\"glossaryname\":\"" + name + "\",\"glossaryid\":\"" + id + "\"}";
-        System.out.println("Sending post for del glossary " + payload);
-        System.out.println("Sending post to:" + "http://" + hostAddress + "/delglossary");
-
-        CloseableHttpClient client = HttpClients.createDefault();
-        HttpPost httpPost = new HttpPost("http://" + hostAddress + "/delglossary");
-
-        MultipartEntityBuilder builder = MultipartEntityBuilder.create();
-        builder.addTextBody("json", payload, ContentType.APPLICATION_JSON);
-        HttpEntity multipart = builder.build();
-
-        //System.out.println(multipart.getContent());
-        httpPost.setEntity(multipart);
-
-        CloseableHttpResponse response = client.execute(httpPost);
-        int status = response.getStatusLine().getStatusCode();
-        System.out.println("REST answered: " + response.toString() + " statusCode: " + status);
-        if (status == 200) {
-
-            try {
-                HttpEntity entity = response.getEntity();
-                String responseString = EntityUtils.toString(entity);
-                System.out.println("REST rs: " + responseString);
-                JSONObject obj = new JSONObject(responseString);
-                System.out.println("REST rs: " + obj);
-
-            } catch (Exception ee) {
-                System.out.println("Excpt: " + ee);
-
-            } finally {
-                IOUtils.closeQuietly(response);
-            }
-        }
-        client.close();
-
-        return status;
-    }
 
     void updateSettingsLabel() {
         if (!apiKeyOk) {
@@ -1056,24 +704,7 @@ public class FilePlugin extends JFrame {
         statusLabel.setText("Connecting to server now...");
 
         try {
-            int status = sendRestJobs();
-            if (status != 200) {
-                statusLabel.setText("Error connecting to server, retrying...");
-            } else {
-                statusLabel.setText("Server connected");
-                //splash.splash.close();
-
-            }
-            status = sendRestGlossaries();
-            if (status != 200) {
-                statusLabel.setText("Error connecting to server, retrying...");
-            } else {
-                started = true;
-                statusLabel.setText("Server connected");
-                //splash.splash.close();
-
-            }
-            status = sendRestGrants();
+            int status = sendRestGrants();
             if (status != 200) {
                 statusLabel.setText("Error connecting to server, retrying...");
             } else {
@@ -1485,130 +1116,7 @@ public class FilePlugin extends JFrame {
         }
     };
 
-    ActionListener gloActionListener = new ActionListener() {
-        public void actionPerformed(ActionEvent ae) {
-            JMenuItem source = (JMenuItem) (ae.getSource());
-            String s = "Glo Action: " + source.getText();
-            System.out.println(s);
-
-            if (source.getText().equals("Select Glossary")) {
-                List<String> glossaries = new ArrayList<String>();
-                glossaries.add(currentGlossary);
-
-                if (!currentGlossary.equals("NO GLOSSARY")) {
-                    glossaries.add("NO GLOSSARY");
-                }
-
-                for (Glossary glo : listGlos) {
-                    if (!currentGlossary.equals(glo.name)) {
-                        glossaries.add(glo.name);
-                    }
-                }
-
-                Object[] oo = new Object[glossaries.size()];
-                oo = glossaries.toArray(oo);
-
-                Object val = JOptionPane.showInputDialog(null, "Please choose a Glossary", " Select Glossary", JOptionPane.QUESTION_MESSAGE, null, oo, currentGlossary);
-                System.out.println("Selected: " + val);
-                if (val != null) {
-                    currentGlossary = (String) val;
-                    currentGlossaryId = 0;
-                    for (Glossary glo : listGlos) {
-                        if (currentGlossary.equals(glo.name)) {
-                            currentGlossaryId = glo.myId;
-                        }
-                    }
-                    updateSettingsLabel();
-                    savePrefs();
-                    checkLang = true;
-                }
-            }
-
-            if (source.getText().equals("Delete Glossary")) {
-                List<String> glossaries = new ArrayList<String>();
-
-                for (Glossary glo : listGlos) {
-                    glossaries.add(glo.name + " [" + glo.myId + "]");
-                }
-
-                Object[] oo = new Object[glossaries.size()];
-                oo = glossaries.toArray(oo);
-
-                JList list = new JList(oo);
-                list.setSelectionMode(ListSelectionModel.MULTIPLE_INTERVAL_SELECTION);
-                int[] select = {};
-                list.setSelectedIndices(select);
-                JOptionPane.showMessageDialog(null, new JScrollPane(list), " Delete Glossary", HEIGHT);
-                //JOptionPane.showMessageDialog(rootPane, ae, s, HEIGHT);
-
-                int selections[] = list.getSelectedIndices();
-                Object selectedValues[] = list.getSelectedValues();
-                try {
-                    for (int i = 0, n = selections.length; i < n; i++) {
-                        if (i == 0) {
-                            System.out.println("Selections: ");
-                        }
-                        System.out.println(selections[i] + "/" + selectedValues[i] + " ");
-                        //get id
-                        String ss = (String) selectedValues[i];
-                        String glossaryName = ss.substring(0, ss.indexOf("[") - 1);
-                        ss = ss.substring(ss.indexOf("[") + 1);
-
-                        ss = ss.substring(0, ss.indexOf("]"));
-
-                        int glossaryId = Integer.parseInt(ss);
-
-                        sendDelGlossary(glossaryId, glossaryName);
-                    }
-                    sendRestGlossaries();
-                } catch (Exception ee) {
-                    System.out.println("Exception sendGlossary " + ee);
-                    JOptionPane.showMessageDialog(null, "process Failed!");
-
-                }
-            }
-
-            if (source.getText().equals("Upload Glossary")) {
-                String choosertitle = "Select Glossary to Upload";
-                JFileChooser chooser = new JFileChooser();
-                chooser.setCurrentDirectory(new java.io.File("."));
-                chooser.setDialogTitle(choosertitle);
-                chooser.setFileSelectionMode(JFileChooser.FILES_AND_DIRECTORIES);
-                //
-                // disable the "All files" option.
-                //
-                FileNameExtensionFilter filter = new FileNameExtensionFilter("TEXT FILES", "txt", "text");
-                chooser.setFileFilter(filter);
-                //chooser.setAcceptAllFileFilterUsed(false);
-                //    
-                if (chooser.showOpenDialog(test) == JFileChooser.APPROVE_OPTION) {
-                    System.out.println("getCurrentDirectory(): "
-                            + chooser.getCurrentDirectory());
-                    System.out.println("getSelectedFile() : "
-                            + chooser.getSelectedFile());
-                    File glossaryFile = chooser.getSelectedFile();
-
-                    try {
-                        sendGlossary(glossaryFile, "AUTO", "AUTO", "NONE");
-                        sendRestGlossaries();
-                        JOptionPane.showMessageDialog(null, "Upload Succeded!");
-                    } catch (Exception ee) {
-                        System.out.println("Exception sendGlossary " + ee);
-                        JOptionPane.showMessageDialog(null, "Upload Failed!");
-                    }
-                } else {
-                    System.out.println("No Selection ");
-                }
-            }
-        }
-
-        public void itemStateChanged(ItemEvent e) {
-            JMenuItem source = (JMenuItem) (e.getSource());
-            String s = "Item event detected." + "    Event source: " + source.getText() + "    New state: " + ((e.getStateChange() == ItemEvent.SELECTED) ? "selected" : "unselected");
-            System.out.println(s);
-        }
-    };
-          ActionListener actionListenerRadio = new ActionListener() {
+            ActionListener actionListenerRadio = new ActionListener() {
       
         public void actionPerformed(ActionEvent actionEvent) {
             AbstractButton abstractButton = (AbstractButton) actionEvent.getSource();
@@ -1809,27 +1317,6 @@ public class FilePlugin extends JFrame {
         prc2MenuItem.addActionListener(prcActionListener);
         prc2MenuItem.setSelected(false);
 
-        JMenu glo = new JMenu("Glossaries");
-        //mb.add(glo);
-
-        ButtonGroup gloGroup = new ButtonGroup();
-        gloMenuItem = new JMenuItem("Select Glossary");
-        gloMenuItem.setMnemonic(KeyEvent.VK_R);
-        gloGroup.add(gloMenuItem);
-        glo.add(gloMenuItem);
-        gloMenuItem.addActionListener(gloActionListener);
-
-        gloMenuItem = new JMenuItem("Upload Glossary");
-        gloMenuItem.setMnemonic(KeyEvent.VK_R);
-        gloGroup.add(gloMenuItem);
-        glo.add(gloMenuItem);
-        gloMenuItem.addActionListener(gloActionListener);
-
-        gloMenuItem = new JMenuItem("Delete Glossary");
-        gloMenuItem.setMnemonic(KeyEvent.VK_R);
-        gloGroup.add(gloMenuItem);
-        glo.add(gloMenuItem);
-        gloMenuItem.addActionListener(gloActionListener);
 
         return mb;
     }
@@ -1851,7 +1338,8 @@ public class FilePlugin extends JFrame {
         TRANSLATING(30, "translating"),
         POSTPROCESING(40, "postprocessing"),
         FINISHED(100, "finished"),
-        DOWNLOADED(110, "downloaded"),
+        downloaded(110, "downloaded"),
+        DOWNLOADED(120, "downloaded"),
         FAILED(-10, "failed"),;
         private final int id;
         private final String msg;

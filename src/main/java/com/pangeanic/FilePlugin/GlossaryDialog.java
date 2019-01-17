@@ -86,8 +86,8 @@ public class GlossaryDialog extends JDialog {
  
             public void actionPerformed(ActionEvent e) {
                     try{
-                        parent.sendGlossary(file, getSrc(), getTgt(), getDescr());
-                        parent.sendRestGlossaries();                                
+                        //parent.sendGlossary(file, getSrc(), getTgt(), getDescr());
+                        //parent.sendRestGlossaries();                                
                     } catch (Exception ee){
                         System.out.println("Exception sendGlossary " + ee);
                         JOptionPane.showMessageDialog(null, "Upload Failed!");
